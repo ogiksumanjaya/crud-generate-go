@@ -1,0 +1,383 @@
+package user
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+
+	"github.com/delos-co/ENL-backend/core/entity"
+	"github.com/delos-co/ENL-backend/payload"
+)
+
+type UserRepo struct {
+	db *sql.DB
+}
+
+func NewUserRepo(db *sql.DB) *UserRepo {
+	return &UserRepo{
+		db: db,
+	}
+}
+
+func (r *UserRepo) CountUserTotalItem(
+	ctx context.Context,
+	filter *payload.UserFilter,
+) (int, error) {
+	var (
+		total int
+		query = strings.Builder{}
+	)
+
+	// Populate Query
+	query.WriteString(`
+		SELECT COUNT(id) AS total
+		FROM "user" WHERE 1=1
+		`)
+
+	// Search by name, email
+	if filter != nil && filter.Search != "" {
+		query.WriteString(fmt.Sprintf(" AND (email ILIKE '%%%s%%' OR fullname ILIKE '%%%s%%'", filter.Search, filter.Search))
+	}
+
+	// Filter by status
+	if filter.Status != "" {
+		query.WriteString(fmt.Sprintf(" AND status = '%s'", filter.Status))
+	}
+
+	stmt, err := r.db.PrepareContext(ctx, query.String())
+	if err != nil {
+		return total, err
+	}
+	defer stmt.Close()
+
+	// Execute Query
+	err = stmt.QueryRowContext(ctx).Scan(&total)
+	if err != nil {
+		return total, err
+	}
+
+	return total, nil
+}
+
+func (r *UserRepo) GetUserList(
+	ctx context.Context,
+	pagination *payload.Pagination,
+	sorting *payload.Sorting,
+	filter *payload.UserFilter,
+) ([]entity.UserEnt, error) {
+	var (
+		limit, offset int
+		direction     string
+		sort          = "created_at"
+		query         = strings.Builder{}
+		datas         = make([]entity.UserEnt, 0)
+		data          entity.UserEnt
+	)
+
+	// Populate Query
+	query.WriteString(`
+			SELECT 
+				user_no, email, fullname, phone_number, 
+				status, is_superadmin, last_login_at
+			FROM "user" WHERE 1=1
+			`)
+
+	// Pagination
+	if pagination != nil {
+		limit = pagination.Limit()
+		offset = pagination.Offset()
+	}
+
+	// Sorting
+	direction = sorting.Direction
+	if sorting.Sort != "" {
+		sort = sorting.Sort
+	}
+
+	// Search by name, email
+	if filter != nil && filter.Search != "" {
+		query.WriteString(fmt.Sprintf(" AND (email ILIKE '%%%s%%' OR fullname ILIKE '%%%s%%'", filter.Search, filter.Search))
+	}
+
+	// Filter by status
+	if filter.Status != "" {
+		query.WriteString(fmt.Sprintf(" AND status = '%s'", filter.Status))
+	}
+
+	// NOTE PROMPT:
+	// IF WITH MULTIPLE FILTERS
+	//if filter.Status != "" {
+	//	permissionSplit := strings.Split(filter.Status, ",")
+	//	query.WriteString(" AND (")
+	//	for i, s := range permissionSplit {
+	//		if i > 0 {
+	//			query.WriteString(" OR ")
+	//		}
+	//		query.WriteString(fmt.Sprintf("status LIKE '%%%s%%'", s))
+	//	}
+	//	query.WriteString(")")
+	//}
+
+	query.WriteString(fmt.Sprintf(" ORDER BY %s %s ", sort, direction))
+	query.WriteString(fmt.Sprintf(" LIMIT %d OFFSET %d ", limit, offset))
+
+	stmt, err := r.db.PrepareContext(ctx, query.String())
+	if err != nil {
+		return datas, err
+	}
+	defer stmt.Close()
+
+	// Execute Query
+	rows, err := stmt.QueryContext(ctx)
+	if err != nil {
+		return datas, err
+	}
+	defer rows.Close()
+
+	// Populate query data
+	for rows.Next() {
+		err = rows.Scan(
+			&data.UserNo,
+			&data.Email,
+			&data.Fullname,
+			&data.PhoneNumber,
+			&data.Status,
+			&data.IsSuperadmin,
+			&data.LastLoginAt,
+		)
+		if err != nil {
+			return datas, err
+		}
+		datas = append(datas, data)
+	}
+
+	return datas, nil
+}
+
+func (r *UserRepo) GetUserDetailById(
+	ctx context.Context,
+	id int,
+) (entity.UserEnt, error) {
+	var (
+		data  entity.UserEnt
+		query = strings.Builder{}
+	)
+
+	// Populate Query
+	query.WriteString(`
+		SELECT 
+			user_no, email, fullname, phone_number, 
+			status, is_superadmin, last_login_at
+		FROM "user" WHERE id = $1
+		`)
+
+	stmt, err := r.db.PrepareContext(ctx, query.String())
+	if err != nil {
+		return data, err
+	}
+	defer stmt.Close()
+
+	// Execute Query
+	err = stmt.QueryRowContext(ctx, id).Scan(
+		&data.UserNo,
+		&data.Email,
+		&data.Fullname,
+		&data.PhoneNumber,
+		&data.Status,
+		&data.IsSuperadmin,
+		&data.LastLoginAt,
+	)
+	if err != nil {
+		return data, err
+	}
+
+	return data, nil
+}
+
+func (r *UserRepo) GetUserDetailByUserNo(
+	ctx context.Context,
+	userNo string,
+) (entity.UserEnt, error) {
+	var (
+		data  entity.UserEnt
+		query = strings.Builder{}
+	)
+
+	// Populate Query
+	query.WriteString(`
+		SELECT 
+			user_no, email, fullname, phone_number, 
+			status, is_superadmin, last_login_at
+		FROM "user" WHERE user_no = $1
+		`)
+
+	stmt, err := r.db.PrepareContext(ctx, query.String())
+	if err != nil {
+		return data, err
+	}
+	defer stmt.Close()
+
+	// Execute Query
+	err = stmt.QueryRowContext(ctx, userNo).Scan(
+		&data.UserNo,
+		&data.Email,
+		&data.Fullname,
+		&data.PhoneNumber,
+		&data.Status,
+		&data.IsSuperadmin,
+		&data.LastLoginAt,
+	)
+	if err != nil {
+		return data, err
+	}
+
+	return data, nil
+}
+
+func (r *UserRepo) CreateUser(
+	ctx context.Context,
+	data *entity.UserEnt,
+) error {
+	var (
+		err   error
+		query = strings.Builder{}
+	)
+
+	// Populate Query
+	query.WriteString(`
+		INSERT INTO "user" (
+			user_no, email, fullname, phone_number, 
+			status, is_superadmin, created_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, 
+		) RETURNING id
+		`)
+
+	stmt, err := r.db.PrepareContext(ctx, query.String())
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	// Execute Query
+	err = stmt.QueryRowContext(
+		ctx,
+		data.UserNo,
+		data.Email,
+		data.Fullname,
+		data.PhoneNumber,
+		data.Status,
+		data.IsSuperadmin,
+		data.CreatedAt,
+	).Scan(&data.Id)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *UserRepo) UpdateUser(
+	ctx context.Context,
+	data entity.UserEnt,
+) error {
+	var (
+		err   error
+		query = strings.Builder{}
+	)
+
+	// Populate Query
+	query.WriteString(`
+		UPDATE "user" SET
+			email = $1, fullname = $2, phone_number = $3, 
+			status = $4, is_superadmin = $5, updated_at = $6
+		WHERE user_no = $7
+		`)
+
+	stmt, err := r.db.PrepareContext(ctx, query.String())
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	// Execute Query
+	_, err = stmt.ExecContext(
+		ctx,
+		data.Email,
+		data.Fullname,
+		data.PhoneNumber,
+		data.Status,
+		data.IsSuperadmin,
+		data.UpdatedAt,
+		data.UserNo,
+	)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *UserRepo) DeleteUser(
+	ctx context.Context,
+	userNo string,
+) error {
+	var (
+		err   error
+		query = strings.Builder{}
+	)
+
+	// Populate Query
+	query.WriteString(`
+		DELETE FROM "user"
+		WHERE user_no = $1
+		`)
+
+	stmt, err := r.db.PrepareContext(ctx, query.String())
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	// Execute Query
+	_, err = stmt.ExecContext(ctx, userNo)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// NOTE PROMPT:
+// If found field deleted_at in the table, then use this function
+//func (r *UserRepo) SoftDeleteUser(
+//	ctx context.Context,
+//	userNo string,
+//) error {
+//	var (
+//		err   error
+//		query = strings.Builder{}
+//	)
+//
+//	// Populate Query
+//	query.WriteString(`
+//		UPDATE "user" SET
+//			deleted_at = $1
+//		WHERE user_no = $2
+//		`)
+//
+//	stmt, err := r.db.PrepareContext(ctx, query.String())
+//	if err != nil {
+//		return err
+//	}
+//	defer stmt.Close()
+//
+//	// Execute Query
+//	_, err = stmt.ExecContext(ctx, time.Now().In(time.UTC), userNo)
+//	if err != nil {
+//		return nil
+//	}
+//
+//	return nil
+//}

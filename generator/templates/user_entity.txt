@@ -1,0 +1,18 @@
+package entity
+
+import "time"
+
+type UserEnt struct {
+	Id           int        `db:"id"`
+	UserNo       string     `db:"user_no"`
+	Email        string     `db:"email"`
+	PhoneNumber  string     `db:"phone_number"`
+	Fullname     string     `db:"fullname"`
+	Status       string     `db:"status"`
+	IsSuperadmin bool       `db:"is_superadmin"`
+	LastLoginAt  *time.Time `db:"last_login_at"`
+	CreatedAt    time.Time  `db:"created_at"`
+	UpdatedAt    *time.Time `db:"updated_at"`
+	CreatedBy    string     `db:"created_by"`
+	UpdatedBy    *string    `db:"updated_by"`
+}
