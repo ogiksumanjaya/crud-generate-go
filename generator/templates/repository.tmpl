@@ -1,0 +1,234 @@
+package {{.PackageName}}
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+
+	"github.com/delos-co/ENL-backend/core/entity"
+	"github.com/delos-co/ENL-backend/payload"
+)
+
+type {{.EntityName}}Repo struct {
+	db *sql.DB
+}
+
+func New{{.EntityName}}Repo(db *sql.DB) *{{.EntityName}}Repo {
+	return &{{.EntityName}}Repo{
+		db: db,
+	}
+}
+
+func (r *{{.EntityName}}Repo) Count{{.EntityName}}TotalItem(
+	ctx context.Context,
+	filter *payload.{{.EntityName}}Filter,
+) (int, error) {
+	var (
+		total int
+		query = strings.Builder{}
+	)
+
+	query.WriteString(`
+		SELECT COUNT(id) AS total
+		FROM {{.TableName}} WHERE 1=1
+	`)
+
+	// Search by name
+	if filter != nil && filter.Search != "" {
+		query.WriteString(fmt.Sprintf(" AND name ILIKE '%%%s%%'", filter.Search))
+	}
+
+	stmt, err := r.db.PrepareContext(ctx, query.String())
+	if err != nil {
+		return total, err
+	}
+	defer stmt.Close()
+
+	err = stmt.QueryRowContext(ctx).Scan(&total)
+	if err != nil {
+		return total, err
+	}
+
+	return total, nil
+}
+
+func (r *{{.EntityName}}Repo) Get{{.EntityName}}List(
+	ctx context.Context,
+	pagination *payload.Pagination,
+	sorting *payload.Sorting,
+	filter *payload.{{.EntityName}}Filter,
+) ([]entity.{{.EntityName}}Ent, error) {
+	var (
+		limit, offset int
+		direction     string
+		sort          = "id"
+		query         = strings.Builder{}
+		datas         = make([]entity.{{.EntityName}}Ent, 0)
+		data          entity.{{.EntityName}}Ent
+	)
+
+	query.WriteString(`
+		SELECT {{.SelectFields}}
+		FROM {{.TableName}} WHERE 1=1
+	`)
+
+	// Pagination
+	if pagination != nil {
+		limit = pagination.Limit()
+		offset = pagination.Offset()
+	}
+
+	// Sorting
+	direction = sorting.Direction
+	if sorting.Sort != "" {
+		sort = sorting.Sort
+	}
+
+	// Search by name
+	if filter != nil && filter.Search != "" {
+		query.WriteString(fmt.Sprintf(" AND name ILIKE '%%%s%%'", filter.Search))
+	}
+
+	query.WriteString(fmt.Sprintf(" ORDER BY %s %s ", sort, direction))
+	query.WriteString(fmt.Sprintf(" LIMIT %d OFFSET %d ", limit, offset))
+
+	stmt, err := r.db.PrepareContext(ctx, query.String())
+	if err != nil {
+		return datas, err
+	}
+	defer stmt.Close()
+
+	rows, err := stmt.QueryContext(ctx)
+	if err != nil {
+		return datas, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		err = rows.Scan({{.ScanFields}})
+		if err != nil {
+			return datas, err
+		}
+		datas = append(datas, data)
+	}
+
+	return datas, nil
+}
+
+func (r *{{.EntityName}}Repo) Get{{.EntityName}}By{{.EntityName}}No(
+	ctx context.Context,
+	{{.LowerEntityName}}No string,
+) (entity.{{.EntityName}}Ent, error) {
+	var (
+		data  entity.{{.EntityName}}Ent
+		query = strings.Builder{}
+	)
+
+	query.WriteString(`
+		SELECT {{.SelectFields}}
+		FROM {{.TableName}} 
+		WHERE {{.LowerEntityName}}_no = $1
+	`)
+
+	stmt, err := r.db.PrepareContext(ctx, query.String())
+	if err != nil {
+		return data, err
+	}
+	defer stmt.Close()
+
+	err = stmt.QueryRowContext(ctx, {{.LowerEntityName}}No).Scan({{.ScanFields}})
+	if err != nil {
+		return data, err
+	}
+
+	return data, nil
+}
+
+func (r *{{.EntityName}}Repo) Create{{.EntityName}}(
+	ctx context.Context,
+	data *entity.{{.EntityName}}Ent,
+) error {
+	var (
+		query = strings.Builder{}
+	)
+
+	query.WriteString(`
+		INSERT INTO {{.TableName}} ({{.InsertFields}})
+		VALUES ({{.InsertValues}})
+		RETURNING id
+	`)
+
+	stmt, err := r.db.PrepareContext(ctx, query.String())
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	err = stmt.QueryRowContext(
+		ctx,
+		{{.CreateExecFields}},
+	).Scan(&data.Id)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *{{.EntityName}}Repo) Update{{.EntityName}}By{{.EntityName}}No(
+	ctx context.Context,
+	data entity.{{.EntityName}}Ent,
+) error {
+	var (
+		query = strings.Builder{}
+	)
+
+	query.WriteString(`
+		UPDATE {{.TableName}} SET {{.UpdateFields}}
+		WHERE {{.LowerEntityName}}_no = ${{.LastParamIndex}}
+	`)
+
+	stmt, err := r.db.PrepareContext(ctx, query.String())
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	_, err = stmt.ExecContext(
+		ctx,
+		{{.UpdateExecFields}},
+	)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *{{.EntityName}}Repo) Delete{{.EntityName}}(
+	ctx context.Context,
+	{{.LowerEntityName}}No string,
+) error {
+	var (
+		query = strings.Builder{}
+	)
+
+	query.WriteString(`
+		DELETE FROM {{.TableName}}
+		WHERE {{.LowerEntityName}}_no = $1
+	`)
+
+	stmt, err := r.db.PrepareContext(ctx, query.String())
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	_, err = stmt.ExecContext(ctx, {{.LowerEntityName}}No)
+	if err != nil {
+		return err
+	}
+
+	return nil
+} 

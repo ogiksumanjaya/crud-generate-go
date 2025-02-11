@@ -1,0 +1,8 @@
+package entity
+
+import "time"
+
+type {{.EntityName}}Ent struct {
+	{{range .Fields}}{{.Name}} {{.Type}} `db:"{{.Tag}}"`
+	{{end}}
+} 

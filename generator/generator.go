@@ -1,18 +1,17 @@
 package generator
 
 import (
-	"context"
 	"embed"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
+	"text/template"
 
-	"github.com/google/generative-ai-go/genai"
-	"google.golang.org/api/option"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
-//go:embed templates/*.txt
+//go:embed templates/*.tmpl
 var templateFS embed.FS
 
 type Config struct {
@@ -20,26 +19,40 @@ type Config struct {
 	MigrationFile     string
 	EntityDir         string
 	RepositoryDir     string
-	APITableName      string
+	PackageName       string
+}
+
+type TemplateData struct {
+	PackageName      string
+	EntityName       string
+	LowerEntityName  string
+	TableName        string
+	Fields           []FieldInfo
+	SelectFields     string
+	ScanFields       string
+	InsertFields     string
+	InsertValues     string
+	UpdateFields     string
+	CreateExecFields string
+	UpdateExecFields string
+	LastParamIndex   int
+}
+
+type FieldInfo struct {
+	Name string
+	Type string
+	Tag  string
 }
 
 type SimpleGenerator struct {
-	model    *genai.GenerativeModel
-	config   Config
-	examples map[string]string
+	config    Config
+	templates map[string]*template.Template
 }
 
-func NewGenerator(apiKey string, config Config) (*SimpleGenerator, error) {
-	ctx := context.Background()
-	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
-	if err != nil {
-		return nil, err
-	}
-
+func NewGenerator(config Config) (*SimpleGenerator, error) {
 	g := &SimpleGenerator{
-		model:    client.GenerativeModel("gemini-1.5-flash"),
-		config:   config,
-		examples: make(map[string]string),
+		config:    config,
+		templates: make(map[string]*template.Template),
 	}
 
 	if err := g.loadTemplates(); err != nil {
@@ -56,30 +69,184 @@ func (g *SimpleGenerator) loadTemplates() error {
 	}
 
 	for _, file := range files {
+		if !strings.HasSuffix(file.Name(), ".tmpl") {
+			continue
+		}
+
 		content, err := templateFS.ReadFile("templates/" + file.Name())
 		if err != nil {
 			return err
 		}
-		g.examples[file.Name()] = string(content)
+
+		tmpl, err := template.New(file.Name()).Parse(string(content))
+		if err != nil {
+			return fmt.Errorf("error parsing template %s: %w", file.Name(), err)
+		}
+
+		g.templates[file.Name()] = tmpl
 	}
 	return nil
 }
 
-func (g *SimpleGenerator) Generate(tableName string) error {
-	migrationContent, err := g.readMigration()
+func (g *SimpleGenerator) Generate(tableName, entityName string) error {
+	schema, err := g.readMigration()
 	if err != nil {
 		return fmt.Errorf("error reading migration: %w", err)
 	}
 
-	prompt := g.buildPrompt(tableName, migrationContent)
-
-	ctx := context.Background()
-	resp, err := g.model.GenerateContent(ctx, genai.Text(prompt))
+	tableInfos, err := ParseSchema(schema, []string{tableName})
 	if err != nil {
+		return fmt.Errorf("error parsing schema: %w", err)
+	}
+
+	tableInfo, exists := tableInfos[tableName]
+	if !exists {
+		return fmt.Errorf("table %s not found in schema", tableName)
+	}
+
+	templateData := &TemplateData{
+		PackageName:      g.config.PackageName,
+		EntityName:       entityName,
+		LowerEntityName:  strings.ToLower(entityName),
+		TableName:        tableName,
+		Fields:           g.convertColumnsToFields(tableInfo.Columns),
+		SelectFields:     g.generateSelectFields(tableInfo.Columns),
+		ScanFields:       g.generateScanFields(tableInfo.Columns),
+		InsertFields:     g.generateInsertFields(tableInfo.Columns),
+		InsertValues:     g.generateInsertValues(tableInfo.Columns),
+		UpdateFields:     g.generateUpdateFields(tableInfo.Columns),
+		CreateExecFields: g.generateCreateExecFields(tableInfo.Columns),
+		UpdateExecFields: g.generateUpdateExecFields(tableInfo.Columns),
+		LastParamIndex:   len(tableInfo.Columns),
+	}
+
+	if err := g.generateEntity(entityName, templateData); err != nil {
 		return err
 	}
 
-	return g.saveGeneratedCode(tableName, resp.Candidates[0].Content.Parts[0].(genai.Text))
+	if err := g.generateRepository(entityName, templateData); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (g *SimpleGenerator) convertColumnsToFields(columns []ColumnInfo) []FieldInfo {
+	fields := make([]FieldInfo, len(columns))
+	for i, col := range columns {
+		fields[i] = FieldInfo{
+			Name: g.toGoFieldName(col.Name),
+			Type: g.toGoType(col.Type, col.Nullable),
+			Tag:  col.Name,
+		}
+	}
+	return fields
+}
+
+func (g *SimpleGenerator) toGoFieldName(dbName string) string {
+	words := strings.Split(dbName, "_")
+	var result string
+	caser := cases.Title(language.English)
+	for _, word := range words {
+		if word == "id" {
+			result += "ID"
+		} else {
+			result += caser.String(word)
+		}
+	}
+	return result
+}
+
+func (g *SimpleGenerator) toGoType(dbType string, nullable bool) string {
+	baseType := strings.ToLower(dbType)
+
+	// Mapping tipe data SQL ke Go
+	var goType string
+	switch {
+	case strings.Contains(baseType, "int"):
+		if strings.Contains(baseType, "big") {
+			goType = "int64"
+		} else {
+			goType = "int"
+		}
+	case strings.Contains(baseType, "varchar"),
+		strings.Contains(baseType, "text"),
+		strings.Contains(baseType, "char"):
+		goType = "string"
+	case strings.Contains(baseType, "bool"):
+		goType = "bool"
+	case strings.Contains(baseType, "timestamp"),
+		strings.Contains(baseType, "date"):
+		goType = "time.Time"
+	case strings.Contains(baseType, "numeric"),
+		strings.Contains(baseType, "decimal"):
+		goType = "float64"
+	default:
+		goType = "string"
+	}
+
+	// Jika nullable, gunakan pointer
+	if nullable && goType != "string" {
+		return "*" + goType
+	}
+
+	return goType
+}
+
+func (g *SimpleGenerator) generateSelectFields(columns []ColumnInfo) string {
+	fields := make([]string, len(columns))
+	for i, col := range columns {
+		fields[i] = col.Name
+	}
+	return strings.Join(fields, ", ")
+}
+
+func (g *SimpleGenerator) generateScanFields(columns []ColumnInfo) string {
+	fields := make([]string, len(columns))
+	for i := range columns {
+		fields[i] = fmt.Sprintf("&data.%s", g.toGoFieldName(columns[i].Name))
+	}
+	return strings.Join(fields, ", ")
+}
+
+func (g *SimpleGenerator) generateInsertFields(columns []ColumnInfo) string {
+	fields := make([]string, len(columns))
+	for i, col := range columns {
+		fields[i] = col.Name
+	}
+	return strings.Join(fields, ", ")
+}
+
+func (g *SimpleGenerator) generateInsertValues(columns []ColumnInfo) string {
+	placeholders := make([]string, len(columns))
+	for i := range columns {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+	}
+	return strings.Join(placeholders, ", ")
+}
+
+func (g *SimpleGenerator) generateUpdateFields(columns []ColumnInfo) string {
+	fields := make([]string, len(columns))
+	for i, col := range columns {
+		fields[i] = fmt.Sprintf("%s = $%d", col.Name, i+1)
+	}
+	return strings.Join(fields, ", ")
+}
+
+func (g *SimpleGenerator) generateCreateExecFields(columns []ColumnInfo) string {
+	fields := make([]string, len(columns))
+	for i := range columns {
+		fields[i] = fmt.Sprintf("data.%s", g.toGoFieldName(columns[i].Name))
+	}
+	return strings.Join(fields, ", ")
+}
+
+func (g *SimpleGenerator) generateUpdateExecFields(columns []ColumnInfo) string {
+	fields := make([]string, len(columns))
+	for i := range columns {
+		fields[i] = fmt.Sprintf("data.%s", g.toGoFieldName(columns[i].Name))
+	}
+	return strings.Join(fields, ", ")
 }
 
 func (g *SimpleGenerator) readMigration() (string, error) {
@@ -92,111 +259,107 @@ func (g *SimpleGenerator) readMigration() (string, error) {
 		return "", fmt.Errorf("error reading migration file: %w", err)
 	}
 
-	if !strings.Contains(string(content), "CREATE TABLE") {
-		return "", fmt.Errorf("invalid migration file format")
-	}
-
 	return string(content), nil
 }
 
-func (g *SimpleGenerator) buildPrompt(tableName, migrationContent string) string {
-	return fmt.Sprintf(`
-        ANDA ADALAH GENERATOR KODE GO YANG HARUS MENGIKUTI TEMPLATE DENGAN KETAT. 
-        TOLONG IKUTI SEMUA ATURAN DI BAWAH INI:
+func (g *SimpleGenerator) generateEntity(entityName string, data *TemplateData) error {
+	entityFile := fmt.Sprintf("%s/%s.go", g.config.EntityDir, strings.ToLower(entityName))
 
-        **PERATURAN KETAT:**
-        1. HANYA gunakan template yang disediakan. JANGAN menambahkan fitur, method, atau logika baru.
-        2. JANGAN mengubah struktur template. Ikuti persis seperti contoh.
-        3. JANGAN menambahkan komentar dalam bentuk apapun, kecuali yang ada di "PROMPT NOTE".
-        4. PASTIKAN tidak ada satupun karakter komentar (// atau /* */) kecuali yang disebutkan di "PROMPT NOTE".
-        5. JIKA ada komentar "// PROMPT NOTE:" atau "-- PROMPT NOTE:", ikuti instruksi di dalamnya sebagai prompt tambahan.
-        6. SESUAIKAN dengan skema database yang diberikan. Gunakan nama kolom dan tipe data yang sesuai.
-        7. JIKA nama tabel berisi quote (contoh: "user"), berarti itu reserved keyword. Rubah nama tabel menjadi huruf kecil semua (contoh: user).
-        8. FORMAT OUTPUT HARUS PERSIS SEPERTI CONTOH. JANGAN menambahkan penjelasan, komentar, atau formatting tambahan.
-
-        **CONTOH ENTITY:**
-        %s
-
-        **CONTOH REPOSITORY:**
-        %s
-
-        **SKEMA DATABASE:**
-        %s
-
-        **TUGAS:**
-        Buatkan 2 file untuk tabel "%s":
-        - File entity dengan format [nama_tabel].go
-        - File repository dengan format [nama_tabel]_repository.go
-
-        **HANDLE PROMPT NOTE:**
-        - Jika ada komentar "// PROMPT NOTE:" atau "-- PROMPT NOTE:", ikuti instruksi di dalamnya.
-        - Contoh: Jika ada "-- PROMPT NOTE: Filter Search: email, status", tambahkan fitur filter search di repository untuk kolom email dan status.
-        - Contoh: Jika ada "-- PROMPT NOTE: Filter by Status with Multiple value", tambahkan fitur filter status dengan multiple value di repository.
-
-        **FORMAT OUTPUT:**
-        [ENTITY]
-        <kode entity>
-        
-        [REPOSITORY]
-        <kode repository>
-
-        **CATATAN:**
-        - JANGAN menambahkan penjelasan, komentar, atau formatting tambahan.
-        - HANYA kembalikan kode yang sudah disesuaikan dengan format di atas.
-    `,
-		g.examples["user_entity.go"],
-		g.examples["user_repository.go"],
-		migrationContent,
-		tableName,
-	)
-}
-
-func (g *SimpleGenerator) validateAndCleanCode(code string) (string, string, error) {
-	// Bersihkan markdown
-	code = strings.ReplaceAll(code, "```go", "")
-	code = strings.Trim(code, "` \n")
-
-	// Hapus semua komentar
-	code = regexp.MustCompile(`(?s)//.*?\n|/\*.*?\*/`).ReplaceAllString(code, "")
-
-	// Split entity dan repository
-	parts := strings.Split(code, "[ENTITY]")
-	if len(parts) < 2 {
-		return "", "", fmt.Errorf("format entity tidak valid")
-	}
-
-	entityRepo := strings.Split(parts[1], "[REPOSITORY]")
-	if len(entityRepo) != 2 {
-		return "", "", fmt.Errorf("format repository tidak valid")
-	}
-
-	entityCode := strings.TrimSpace(entityRepo[0])
-	repoCode := strings.TrimSpace(entityRepo[1])
-
-	// Validasi dasar
-	if strings.Contains(entityCode, "//") || strings.Contains(repoCode, "//") {
-		return "", "", fmt.Errorf("masih terdapat komentar dalam kode")
-	}
-
-	return entityCode, repoCode, nil
-}
-
-func (g *SimpleGenerator) saveGeneratedCode(tableName string, content genai.Text) error {
-	entityCode, repoCode, err := g.validateAndCleanCode(string(content))
+	f, err := os.Create(entityFile)
 	if err != nil {
-		return fmt.Errorf("validasi kode gagal: %w", err)
-	}
-
-	entityFile := fmt.Sprintf("%s/%s.go", g.config.EntityDir, strings.ToLower(tableName))
-	if err := os.WriteFile(entityFile, []byte(entityCode), 0644); err != nil {
 		return err
 	}
+	defer f.Close()
 
-	repoFolder := fmt.Sprintf("%s/%s", g.config.RepositoryDir, strings.ToLower(tableName))
-	if err := os.MkdirAll(repoFolder, 0755); err != nil {
-		return fmt.Errorf("gagal membuat folder repository untuk tabel %s: %w", tableName, err)
+	return g.templates["entity.tmpl"].Execute(f, data)
+}
+
+func (g *SimpleGenerator) generateRepository(entityName string, data *TemplateData) error {
+	repoDir := fmt.Sprintf("%s/%s", g.config.RepositoryDir, strings.ToLower(entityName))
+	if err := os.MkdirAll(repoDir, os.ModePerm); err != nil {
+		return fmt.Errorf("error creating repository directory: %w", err)
 	}
 
-	repoFile := fmt.Sprintf("%s/%s/postgres.go", g.config.RepositoryDir, strings.ToLower(tableName))
-	return os.WriteFile(repoFile, []byte(repoCode), 0644)
+	repoFile := fmt.Sprintf("%s/postgres.go", repoDir)
+
+	f, err := os.Create(repoFile)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	return g.templates["repository.tmpl"].Execute(f, data)
+}
+
+type TableInfo struct {
+	Columns []ColumnInfo
+}
+
+type ColumnInfo struct {
+	Name     string
+	Type     string
+	Nullable bool
+}
+
+func ParseSchema(schema string, targetTables []string) (map[string]*TableInfo, error) {
+	tableInfos := make(map[string]*TableInfo)
+	var currentTable string
+	var inTargetTable bool
+
+	lines := strings.Split(schema, "\n")
+	targetTableSet := make(map[string]bool)
+	for _, table := range targetTables {
+		targetTableSet[table] = true
+	}
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		if line == "" || strings.HasPrefix(line, "--") {
+			continue
+		}
+
+		if strings.HasPrefix(line, "CREATE TABLE") {
+			inTargetTable = false
+			for table := range targetTableSet {
+				if strings.Contains(line, table) {
+					inTargetTable = true
+					currentTable = table
+					tableInfos[currentTable] = &TableInfo{}
+					break
+				}
+			}
+			continue
+		}
+
+		if inTargetTable && strings.Contains(line, " ") {
+			parts := strings.Fields(line)
+			if len(parts) < 2 {
+				continue
+			}
+
+			columnName := strings.Trim(parts[0], `",`)
+			columnType := strings.SplitN(parts[1], "(", 2)[0]
+
+			nullable := !strings.Contains(strings.ToUpper(line), "NOT NULL")
+
+			column := ColumnInfo{
+				Name:     columnName,
+				Type:     columnType,
+				Nullable: nullable,
+			}
+
+			tableInfos[currentTable].Columns = append(tableInfos[currentTable].Columns, column)
+		}
+
+		if inTargetTable && strings.HasSuffix(line, ");") {
+			inTargetTable = false
+		}
+	}
+
+	if len(tableInfos) == 0 {
+		return nil, fmt.Errorf("none of the specified tables found in schema")
+	}
+
+	return tableInfos, nil
 }
