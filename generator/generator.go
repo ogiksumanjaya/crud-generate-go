@@ -19,11 +19,11 @@ type Config struct {
 	MigrationFile     string
 	EntityDir         string
 	RepositoryDir     string
-	PackageName       string
+	UsecaseDir        string
+	HandlerDir        string
 }
 
 type TemplateData struct {
-	PackageName      string
 	EntityName       string
 	LowerEntityName  string
 	TableName        string
@@ -105,7 +105,6 @@ func (g *SimpleGenerator) Generate(tableName, entityName string) error {
 	}
 
 	templateData := &TemplateData{
-		PackageName:      g.config.PackageName,
 		EntityName:       entityName,
 		LowerEntityName:  strings.ToLower(entityName),
 		TableName:        tableName,
@@ -125,6 +124,14 @@ func (g *SimpleGenerator) Generate(tableName, entityName string) error {
 	}
 
 	if err := g.generateRepository(entityName, templateData); err != nil {
+		return err
+	}
+
+	if err := g.generateUsecase(entityName, templateData); err != nil {
+		return err
+	}
+
+	if err := g.generateHandler(entityName, templateData); err != nil {
 		return err
 	}
 
@@ -289,6 +296,30 @@ func (g *SimpleGenerator) generateRepository(entityName string, data *TemplateDa
 	defer f.Close()
 
 	return g.templates["repository.tmpl"].Execute(f, data)
+}
+
+func (g *SimpleGenerator) generateUsecase(entityName string, data *TemplateData) error {
+	usecaseFile := fmt.Sprintf("%s/%s_usecase.go", g.config.UsecaseDir, strings.ToLower(entityName))
+
+	f, err := os.Create(usecaseFile)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	return g.templates["usecase.tmpl"].Execute(f, data)
+}
+
+func (g *SimpleGenerator) generateHandler(entityName string, data *TemplateData) error {
+	handlerFile := fmt.Sprintf("%s/%s.go", g.config.HandlerDir, strings.ToLower(entityName))
+
+	f, err := os.Create(handlerFile)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	return g.templates["handler.tmpl"].Execute(f, data)
 }
 
 type TableInfo struct {

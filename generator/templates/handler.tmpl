@@ -1,0 +1,186 @@
+package api
+
+import (
+	"net/http"
+	"strconv"
+
+	"github.com/delos-co/ENL-backend/core/module"
+	"github.com/delos-co/ENL-backend/payload"
+	"github.com/delos-co/ENL-backend/pkg/common/response"
+	"github.com/go-chi/chi/v5"
+)
+
+type {{.EntityName}}Handler struct {
+	{{.EntityName}}UC *module.{{.EntityName}}Usecase
+}
+
+func New{{.EntityName}}Handler(r chi.Router,
+	{{.EntityName}}UC *module.{{.EntityName}}Usecase,
+) {
+	handler := &{{.EntityName}}Handler{
+		{{.EntityName}}UC: {{.EntityName}}UC,
+	}
+
+	r.Route("/{{.LowerEntityName}}s", func(r chi.Router) {
+		r.Get("/", handler.Get{{.EntityName}}List)
+		r.Post("/", handler.Add{{.EntityName}})
+		r.Get("/{{`{`}}{{.LowerEntityName}}_no{{`}`}}", handler.Get{{.EntityName}}By{{.EntityName}}No)
+		r.Put("/{{`{`}}{{.LowerEntityName}}_no{{`}`}}", handler.Update{{.EntityName}}By{{.EntityName}}No)
+		r.Delete("/{{`{`}}{{.LowerEntityName}}_no{{`}`}}", handler.Delete{{.EntityName}}By{{.EntityName}}No)
+	})
+}
+
+// @Summary      [CMS] Get list of {{.EntityName}}s
+// @Description  Retrieve a paginated and sorted list of {{.EntityName}}s
+// @Tags         {{.EntityName}}
+// @Accept       json
+// @Produce      json
+// @Param        sort        query        string                                          false  "Field to sort by"
+// @Param        direction   query        string                                          false  "Sort direction (asc or desc)"
+// @Param        pageSize    query        int                                             false  "Page size"
+// @Param        page        query        int                                             false  "Page"
+// @Success      200         {object}     response.Response{data=[]payload.{{.EntityName}}Resp}   "Successfully retrieved {{.EntityName}}s"
+// @Failure      400         {object}     response.Response                               "Bad request - Invalid query parameters"
+// @Failure      404         {object}     response.Response                               "{{.EntityName}} not found"
+// @Failure      500         {object}     response.Response                               "Internal server error"
+// @Router       /v1/admin/{{.LowerEntityName}}s [get]
+func (h *{{.EntityName}}Handler) Get{{.EntityName}}List(w http.ResponseWriter, r *http.Request) {
+	var (
+		ctx         = r.Context()
+		values      = r.URL.Query()
+		pageSize, _ = strconv.Atoi(values.Get("pageSize"))
+		page, _     = strconv.Atoi(values.Get("page"))
+		pagination  = &payload.Pagination{Page: page, PageSize: pageSize}
+		filter      = &payload.{{.EntityName}}Filter{}
+		sort        = values.Get("sort")
+		direction   = values.Get("direction")
+		sorting     = &payload.Sorting{Sort: sort, Direction: direction}
+	)
+
+	resp, err := h.{{.EntityName}}UC.Get{{.EntityName}}List(ctx, filter, pagination, sorting)
+	if err != nil {
+		response.JSON(w, http.StatusInternalServerError, nil, nil, err)
+		return
+	}
+
+	parsed := payload.Parse{{.EntityName}}ListResp(resp)
+	response.JSON(w, http.StatusOK, parsed, pagination, nil)
+}
+
+// @Summary      [CMS] Add {{.EntityName}}
+// @Description  Add a new {{.LowerEntityName}}
+// @Tags         {{.EntityName}}
+// @Accept       json
+// @Produce      json
+// @Param        {{.LowerEntityName}}     body         payload.Add{{.EntityName}}Req                           true   "{{.EntityName}} details"
+// @Success      200         {object}     response.Response{data=string}                  "Successfully added {{.LowerEntityName}}"
+// @Failure      400         {object}     response.Response                               "Bad request - Invalid input data"
+// @Failure      500         {object}     response.Response                               "Internal server error"
+// @Router       /v1/admin/{{.LowerEntityName}}s [post]
+func (h *{{.EntityName}}Handler) Add{{.EntityName}}(w http.ResponseWriter, r *http.Request) {
+	var (
+		err error
+		ctx = r.Context()
+		req payload.Add{{.EntityName}}Req
+	)
+
+	err = payload.BindAndValidate(r, &req)
+	if err != nil {
+		response.JSON(w, http.StatusBadRequest, nil, nil, err)
+		return
+	}
+
+	{{.LowerEntityName}}No, err := h.{{.EntityName}}UC.Add{{.EntityName}}(ctx, req)
+	if err != nil {
+		response.JSON(w, http.StatusInternalServerError, nil, nil, err)
+		return
+	}
+
+	response.JSON(w, http.StatusOK, {{.LowerEntityName}}No, nil, nil)
+}
+
+// @Summary      [CMS] Get {{.EntityName}} by {{.EntityName}} No
+// @Description  Retrieve details of a specific {{.EntityName}} using its {{.EntityName}} No
+// @Tags         {{.EntityName}}
+// @Accept       json
+// @Produce      json
+// @Param        {{.LowerEntityName}}_no  path         string                                          true   "{{.EntityName}} No"
+// @Success      200         {object}     response.Response{data=payload.{{.EntityName}}Resp}     "Successfully retrieved {{.EntityName}}"
+// @Failure      400         {object}     response.Response                               "Bad request - Invalid {{.EntityName}} No format"
+// @Failure      404         {object}     response.Response                               "{{.EntityName}} not found"
+// @Failure      500         {object}     response.Response                               "Internal server error"
+// @Router       /v1/admin/{{.LowerEntityName}}s/{{"{"}}_no{"}"} [get]
+func (h *{{.EntityName}}Handler) Get{{.EntityName}}By{{.EntityName}}No(w http.ResponseWriter, r *http.Request) {
+	var (
+		ctx = r.Context()
+		{{.LowerEntityName}}No = chi.URLParam(r, "{{.LowerEntityName}}_no")
+	)
+
+	resp, err := h.{{.EntityName}}UC.Get{{.EntityName}}By{{.EntityName}}No(ctx, {{.LowerEntityName}}No)
+	if err != nil {
+		response.JSON(w, http.StatusNotFound, nil, nil, err)
+		return
+	}
+
+	parsed := payload.Parse{{.EntityName}}Resp(resp)
+	response.JSON(w, http.StatusOK, parsed, nil, nil)
+}
+
+// @Summary      [CMS] Update {{.EntityName}} by {{.EntityName}} No
+// @Description  Update the details of a specific {{.EntityName}} using its {{.EntityName}} No
+// @Tags         {{.EntityName}}
+// @Accept       json
+// @Produce      json
+// @Param        {{.LowerEntityName}}_no  path         string                                          true   "{{.EntityName}} No"
+// @Param        {{.LowerEntityName}}     body         payload.Update{{.EntityName}}Req                        true   "Updated {{.EntityName}} details"
+// @Success      200         {object}     response.Response                               "{{.EntityName}} updated successfully"
+// @Failure      400         {object}     response.Response                               "Bad request - Invalid input data or {{.EntityName}} No format"
+// @Failure      500         {object}     response.Response                               "Internal server error"
+// @Router       /v1/admin/{{.LowerEntityName}}s/{{"{"}}_no{"}"} [put]
+func (h *{{.EntityName}}Handler) Update{{.EntityName}}By{{.EntityName}}No(w http.ResponseWriter, r *http.Request) {
+	var (
+		err error
+		ctx = r.Context()
+		{{.LowerEntityName}}No = chi.URLParam(r, "{{.LowerEntityName}}_no")
+		req payload.Update{{.EntityName}}Req
+	)
+
+	err = payload.BindAndValidate(r, &req)
+	if err != nil {
+		response.JSON(w, http.StatusBadRequest, nil, nil, err)
+		return
+	}
+
+	err = h.{{.EntityName}}UC.Update{{.EntityName}}By{{.EntityName}}No(ctx, {{.LowerEntityName}}No, req)
+	if err != nil {
+		response.JSON(w, http.StatusBadRequest, nil, nil, err)
+		return
+	}
+
+	response.JSON(w, http.StatusOK, nil, nil, nil)
+}
+
+// @Summary      [CMS] Delete {{.EntityName}} by {{.EntityName}} No
+// @Description  Delete a specific {{.EntityName}} using its {{.EntityName}} No
+// @Tags         {{.EntityName}}
+// @Accept       json
+// @Produce      json
+// @Param        {{.LowerEntityName}}_no  path         string                                          true   "{{.EntityName}} No"
+// @Success      200         {object}     response.Response                               "{{.EntityName}} deleted successfully"
+// @Failure      404         {object}     response.Response                               "{{.EntityName}} not found"
+// @Failure      500         {object}     response.Response                               "Internal server error"
+// @Router       /v1/admin/{{.LowerEntityName}}s/{{"{"}}_no{"}"} [delete]
+func (h *{{.EntityName}}Handler) Delete{{.EntityName}}By{{.EntityName}}No(w http.ResponseWriter, r *http.Request) {
+	var (
+		ctx = r.Context()
+		{{.LowerEntityName}}No = chi.URLParam(r, "{{.LowerEntityName}}_no")
+	)
+
+	err := h.{{.EntityName}}UC.Delete{{.EntityName}}By{{.EntityName}}No(ctx, {{.LowerEntityName}}No)
+	if err != nil {
+		response.JSON(w, http.StatusNotFound, nil, nil, err)
+		return
+	}
+
+	response.JSON(w, http.StatusOK, nil, nil, nil)
+} 

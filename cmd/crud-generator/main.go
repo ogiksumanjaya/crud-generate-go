@@ -16,7 +16,8 @@ func main() {
 		TargetProjectRoot: ".",           // hardcoded ke directory saat ini
 		EntityDir:         "core/entity", // hardcoded ke folder entity
 		RepositoryDir:     "repository",  // hardcoded ke folder repository
-		PackageName:       "repository",  // hardcoded package repository
+		UsecaseDir:        "core/module", // hardcoded ke folder usecase
+		HandlerDir:        "handler/api", // hardcoded ke folder api
 	}
 
 	// Menerima parameter tabel yang dipisahkan koma

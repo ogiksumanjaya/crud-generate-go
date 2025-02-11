@@ -1,0 +1,149 @@
+package module
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/delos-co/ENL-backend/core/entity"
+	"github.com/delos-co/ENL-backend/payload"
+	"github.com/delos-co/ENL-backend/pkg/common/helpers"
+	"github.com/delos-co/ENL-backend/repository/{{.LowerEntityName}}"
+
+	ctxUtil "github.com/delos-co/ENL-backend/pkg/context"
+)
+
+type {{.EntityName}}Usecase struct {
+	{{.EntityName}}Repo *{{.LowerEntityName}}.{{.EntityName}}Repo
+}
+
+func New{{.EntityName}}Usecase(
+	{{.LowerEntityName}}Repo *{{.LowerEntityName}}.{{.EntityName}}Repo,
+) *{{.EntityName}}Usecase {
+	return &{{.EntityName}}Usecase{
+		{{.EntityName}}Repo: {{.LowerEntityName}}Repo,
+	}
+}
+
+const MODULE_{{.EntityName}} string = "{{.LowerEntityName}}"
+
+func (w *{{.EntityName}}Usecase) Get{{.EntityName}}List(
+	ctx context.Context,
+	filter *payload.{{.EntityName}}Filter,
+	pagination *payload.Pagination,
+	sorting *payload.Sorting,
+) ([]entity.{{.EntityName}}Ent, error) {
+	if pagination.PageSize == 0 {
+		pagination.PageSize = payload.DefaultPageSize
+	}
+	if sorting.Direction == "" {
+		sorting.Direction = payload.DefaultDirection
+	}
+
+	// If on first page, get the total items
+	if pagination.Page == 1 {
+		total, err := w.{{.EntityName}}Repo.Count{{.EntityName}}TotalItem(ctx, filter)
+		if err != nil {
+			return []entity.{{.EntityName}}Ent{}, errHandler(err, fmt.Sprintf(payload.ErrDataNotFound, MODULE_{{.EntityName}}))
+		}
+		pagination.SetTotalItem(total)
+		pagination.SetTotalPage(total)
+	}
+
+	resp, err := w.{{.EntityName}}Repo.Get{{.EntityName}}List(ctx, pagination, sorting, filter)
+	if err != nil {
+		return []entity.{{.EntityName}}Ent{}, errHandler(err, fmt.Sprintf(payload.ErrDataNotFound, MODULE_{{.EntityName}}))
+	}
+
+	return resp, nil
+}
+
+func (w *{{.EntityName}}Usecase) Add{{.EntityName}}(
+	ctx context.Context,
+	req payload.Add{{.EntityName}}Req,
+) (string, error) {
+	var (
+		err       error
+		clientCtx = ctxUtil.ParseContextToClientContext(ctx)
+		dateNow   = time.Now().In(time.UTC)
+	)
+
+	// Generate {{.LowerEntityName}} no
+	{{.LowerEntityName}}No, err := helpers.Generate(`[A-Z0-9]{10}`)
+	if err != nil {
+		return {{.LowerEntityName}}No, errHandler(err, fmt.Sprintf(payload.ErrGenerateID, MODULE_{{.EntityName}}))
+	}
+
+	// Create {{.LowerEntityName}}
+	err = w.{{.EntityName}}Repo.Create{{.EntityName}}(ctx, &entity.{{.EntityName}}Ent{
+		{{.EntityName}}No: {{.LowerEntityName}}No,
+		CreatedAt: dateNow,
+		CreatedBy: clientCtx.Fullname,
+	})
+	if err != nil {
+		return {{.LowerEntityName}}No, errHandler(err, fmt.Sprintf(payload.ErrAddData, MODULE_{{.EntityName}}))
+	}
+
+	return {{.LowerEntityName}}No, nil
+}
+
+func (w *{{.EntityName}}Usecase) Get{{.EntityName}}By{{.EntityName}}No(
+	ctx context.Context,
+	{{.LowerEntityName}}No string,
+) (entity.{{.EntityName}}Ent, error) {
+	resp, err := w.{{.EntityName}}Repo.Get{{.EntityName}}By{{.EntityName}}No(ctx, {{.LowerEntityName}}No)
+	if err != nil {
+		return resp, errHandler(err, fmt.Sprintf(payload.ErrDataNotFound, MODULE_{{.EntityName}}))
+	}
+
+	return resp, nil
+}
+
+func (w *{{.EntityName}}Usecase) Update{{.EntityName}}By{{.EntityName}}No(
+	ctx context.Context,
+	{{.LowerEntityName}}No string,
+	req payload.Update{{.EntityName}}Req,
+) error {
+	var (
+		err       error
+		clientCtx = ctxUtil.ParseContextToClientContext(ctx)
+		dateNow   = time.Now().In(time.UTC)
+	)
+
+	// Update {{.LowerEntityName}}
+	err = w.{{.EntityName}}Repo.Update{{.EntityName}}By{{.EntityName}}No(ctx, entity.{{.EntityName}}Ent{
+		{{.EntityName}}No: {{.LowerEntityName}}No,
+		UpdatedAt: &dateNow,
+		UpdatedBy: &clientCtx.Fullname,
+	})
+	if err != nil {
+		return errHandler(err, fmt.Sprintf(payload.ErrUpdateData, MODULE_{{.EntityName}}))
+	}
+
+	return nil
+}
+
+func (w *{{.EntityName}}Usecase) Delete{{.EntityName}}By{{.EntityName}}No(
+	ctx context.Context,
+	{{.LowerEntityName}}No string,
+) error {
+	{{.LowerEntityName}}Id, err := w.{{.EntityName}}Repo.Get{{.EntityName}}IdBy{{.EntityName}}No(ctx, {{.LowerEntityName}}No)
+	if err != nil {
+		return errHandler(err, fmt.Sprintf(payload.ErrDataNotFound, MODULE_{{.EntityName}}))
+	}
+
+	// Check if there is any assign on this {{.LowerEntityName}}
+	exist, err := w.{{.EntityName}}Repo.CheckAssignOnThis{{.EntityName}}Exist(ctx, {{.LowerEntityName}}Id)
+	if err != nil {
+		return errHandler(err, fmt.Sprintf(payload.ErrDataNotFound, MODULE_{{.EntityName}}))
+	}
+
+	// If there is any assign on this {{.LowerEntityName}}, return error
+	if exist {
+		return errors.New(fmt.Sprintf(payload.ErrForbiddenDeleteData, MODULE_{{.EntityName}}))
+	}
+
+	// Delete {{.LowerEntityName}}
+	return w.{{.EntityName}}Repo.Delete{{.EntityName}}(ctx, {{.LowerEntityName}}No)
+} 
