@@ -21,6 +21,10 @@ type Config struct {
 	RepositoryDir     string
 	UsecaseDir        string
 	HandlerDir        string
+	SkipEntity        bool
+	SkipRepository    bool
+	SkipUsecase       bool
+	SkipHandler       bool
 }
 
 type TemplateData struct {
@@ -119,20 +123,28 @@ func (g *SimpleGenerator) Generate(tableName, entityName string) error {
 		LastParamIndex:   len(tableInfo.Columns),
 	}
 
-	if err := g.generateEntity(entityName, templateData); err != nil {
-		return err
+	if !g.config.SkipEntity {
+		if err := g.generateEntity(entityName, templateData); err != nil {
+			return err
+		}
 	}
 
-	if err := g.generateRepository(entityName, templateData); err != nil {
-		return err
+	if !g.config.SkipRepository {
+		if err := g.generateRepository(entityName, templateData); err != nil {
+			return err
+		}
 	}
 
-	if err := g.generateUsecase(entityName, templateData); err != nil {
-		return err
+	if !g.config.SkipUsecase {
+		if err := g.generateUsecase(entityName, templateData); err != nil {
+			return err
+		}
 	}
 
-	if err := g.generateHandler(entityName, templateData); err != nil {
-		return err
+	if !g.config.SkipHandler {
+		if err := g.generateHandler(entityName, templateData); err != nil {
+			return err
+		}
 	}
 
 	return nil

@@ -24,6 +24,12 @@ func main() {
 	flag.StringVar(&config.MigrationFile, "migration-file", "", "Path to specific migration file (required)")
 	tables := flag.String("table", "", "Comma-separated list of database table names to generate (required)")
 
+	// Add skip flags
+	flag.BoolVar(&config.SkipEntity, "skip-entity", false, "Skip entity generation")
+	flag.BoolVar(&config.SkipRepository, "skip-repository", false, "Skip repository generation")
+	flag.BoolVar(&config.SkipUsecase, "skip-usecase", false, "Skip usecase generation")
+	flag.BoolVar(&config.SkipHandler, "skip-handler", false, "Skip handler generation")
+
 	flag.Parse()
 
 	if config.MigrationFile == "" {
