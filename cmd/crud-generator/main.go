@@ -18,6 +18,7 @@ func main() {
 		RepositoryDir:     "repository",  // hardcoded ke folder repository
 		UsecaseDir:        "core/module", // hardcoded ke folder usecase
 		HandlerDir:        "handler/api", // hardcoded ke folder api
+		PayloadDir:        "payload",     // hardcoded ke folder payload
 	}
 
 	// Menerima parameter tabel yang dipisahkan koma
@@ -29,6 +30,7 @@ func main() {
 	flag.BoolVar(&config.SkipRepository, "skip-repository", false, "Skip repository generation")
 	flag.BoolVar(&config.SkipUsecase, "skip-usecase", false, "Skip usecase generation")
 	flag.BoolVar(&config.SkipHandler, "skip-handler", false, "Skip handler generation")
+	flag.BoolVar(&config.SkipPayload, "skip-payload", false, "Skip payload generation")
 
 	flag.Parse()
 

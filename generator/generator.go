@@ -21,10 +21,12 @@ type Config struct {
 	RepositoryDir     string
 	UsecaseDir        string
 	HandlerDir        string
+	PayloadDir        string
 	SkipEntity        bool
 	SkipRepository    bool
 	SkipUsecase       bool
 	SkipHandler       bool
+	SkipPayload       bool
 }
 
 type TemplateData struct {
@@ -143,6 +145,12 @@ func (g *SimpleGenerator) Generate(tableName, entityName string) error {
 
 	if !g.config.SkipHandler {
 		if err := g.generateHandler(entityName, templateData); err != nil {
+			return err
+		}
+	}
+
+	if !g.config.SkipPayload {
+		if err := g.generatePayload(entityName, templateData); err != nil {
 			return err
 		}
 	}
@@ -332,6 +340,23 @@ func (g *SimpleGenerator) generateHandler(entityName string, data *TemplateData)
 	defer f.Close()
 
 	return g.templates["handler.tmpl"].Execute(f, data)
+}
+
+func (g *SimpleGenerator) generatePayload(entityName string, data *TemplateData) error {
+	// Ensure directory exists
+	if err := os.MkdirAll(g.config.PayloadDir, os.ModePerm); err != nil {
+		return fmt.Errorf("error creating payload directory: %w", err)
+	}
+
+	payloadFile := fmt.Sprintf("%s/%s.go", g.config.PayloadDir, strings.ToLower(entityName))
+
+	f, err := os.Create(payloadFile)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	return g.templates["payload.tmpl"].Execute(f, data)
 }
 
 type TableInfo struct {
