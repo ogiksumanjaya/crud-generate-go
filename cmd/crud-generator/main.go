@@ -14,21 +14,26 @@ import (
 func main() {
 	config := generator.Config{
 		TargetProjectRoot: ".",           // hardcoded ke directory saat ini
-		EntityDir:         "core/entity", // hardcoded ke folder entity
-		RepositoryDir:     "repository",  // hardcoded ke folder repository
-		UsecaseDir:        "core/module", // hardcoded ke folder usecase
-		HandlerDir:        "handler/api", // hardcoded ke folder api
+		EntityDir:         "core/entity", // fallback directory
+		RepositoryDir:     "repository",  // fallback directory
+		UsecaseDir:        "core/module", // fallback directory
+		HandlerDir:        "handler/api", // fallback directory
+		PayloadDir:        "payload",     // fallback directory
 	}
 
 	// Menerima parameter tabel yang dipisahkan koma
 	flag.StringVar(&config.MigrationFile, "migration-file", "", "Path to specific migration file (required)")
 	tables := flag.String("table", "", "Comma-separated list of database table names to generate (required)")
 
+	// Template directory is now required
+	flag.StringVar(&config.TemplateDir, "template-dir", "", "Path to templates directory (required)")
+
 	// Add skip flags
 	flag.BoolVar(&config.SkipEntity, "skip-entity", false, "Skip entity generation")
 	flag.BoolVar(&config.SkipRepository, "skip-repository", false, "Skip repository generation")
 	flag.BoolVar(&config.SkipUsecase, "skip-usecase", false, "Skip usecase generation")
 	flag.BoolVar(&config.SkipHandler, "skip-handler", false, "Skip handler generation")
+	flag.BoolVar(&config.SkipPayload, "skip-payload", false, "Skip payload generation")
 
 	flag.Parse()
 
@@ -38,6 +43,10 @@ func main() {
 
 	if *tables == "" {
 		log.Fatal("Table names are required. Use --table flag")
+	}
+
+	if config.TemplateDir == "" {
+		log.Fatal("Template directory is required. Use --template-dir flag")
 	}
 
 	g, err := generator.NewGenerator(config)

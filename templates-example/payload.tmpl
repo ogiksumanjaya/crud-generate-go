@@ -1,0 +1,37 @@
+package payload
+
+type (
+	// Filter
+	{{.EntityName}}Filter struct {
+		Search string `json:"search"`
+	}
+
+	// Request Payload
+	Add{{.EntityName}}Req struct {
+		// Add fields here based on entity structure
+	}
+
+	Update{{.EntityName}}Req struct {
+		// Add fields here based on entity structure
+	}
+
+	// Response Payload
+	{{.EntityName}}Resp struct {
+		// Add fields here based on entity structure
+	}
+)
+
+// Parsed Data
+func Parse{{.EntityName}}Resp(data entity.{{.EntityName}}Ent) {{.EntityName}}Resp {
+	return {{.EntityName}}Resp{
+		// Map entity fields to response fields
+	}
+}
+
+func Parse{{.EntityName}}ListResp(data []entity.{{.EntityName}}Ent) []{{.EntityName}}Resp {
+	result := make([]{{.EntityName}}Resp, len(data))
+	for i, item := range data {
+		result[i] = Parse{{.EntityName}}Resp(item)
+	}
+	return result
+}
