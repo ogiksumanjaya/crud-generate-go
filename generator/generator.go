@@ -1,9 +1,10 @@
 package generator
 
 import (
-	"embed"
+	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/template"
 
@@ -11,17 +12,17 @@ import (
 	"golang.org/x/text/language"
 )
 
-//go:embed templates/*.tmpl
-var templateFS embed.FS
+// Removed embedded templates FS
 
 type Config struct {
 	TargetProjectRoot string
 	MigrationFile     string
-	EntityDir         string
-	RepositoryDir     string
-	UsecaseDir        string
-	HandlerDir        string
-	PayloadDir        string
+	EntityDir         string // Now used as fallback if not specified in template
+	RepositoryDir     string // Now used as fallback if not specified in template
+	UsecaseDir        string // Now used as fallback if not specified in template
+	HandlerDir        string // Now used as fallback if not specified in template
+	PayloadDir        string // Now used as fallback if not specified in template
+	TemplateDir       string // Required - directory containing templates
 	SkipEntity        bool
 	SkipRepository    bool
 	SkipUsecase       bool
@@ -44,6 +45,13 @@ type TemplateData struct {
 	LastParamIndex   int
 }
 
+type TemplateInfo struct {
+	Name     string
+	Content  string
+	Path     string // Output directory path from template comment
+	FileName string // Output file name from template comment
+}
+
 type FieldInfo struct {
 	Name string
 	Type string
@@ -51,14 +59,16 @@ type FieldInfo struct {
 }
 
 type SimpleGenerator struct {
-	config    Config
-	templates map[string]*template.Template
+	config       Config
+	templates    map[string]*template.Template
+	templateInfo map[string]TemplateInfo
 }
 
 func NewGenerator(config Config) (*SimpleGenerator, error) {
 	g := &SimpleGenerator{
-		config:    config,
-		templates: make(map[string]*template.Template),
+		config:       config,
+		templates:    make(map[string]*template.Template),
+		templateInfo: make(map[string]TemplateInfo),
 	}
 
 	if err := g.loadTemplates(); err != nil {
@@ -69,29 +79,104 @@ func NewGenerator(config Config) (*SimpleGenerator, error) {
 }
 
 func (g *SimpleGenerator) loadTemplates() error {
-	files, err := templateFS.ReadDir("templates")
+	// Check if template directory exists
+	if g.config.TemplateDir == "" {
+		return fmt.Errorf("template directory is required")
+	}
+
+	if _, err := os.Stat(g.config.TemplateDir); os.IsNotExist(err) {
+		return fmt.Errorf("template directory does not exist: %s", g.config.TemplateDir)
+	}
+
+	// List all .tmpl files in the directory
+	files, err := os.ReadDir(g.config.TemplateDir)
 	if err != nil {
 		return err
 	}
 
+	if len(files) == 0 {
+		return fmt.Errorf("no templates found in directory: %s", g.config.TemplateDir)
+	}
+
 	for _, file := range files {
-		if !strings.HasSuffix(file.Name(), ".tmpl") {
+		if file.IsDir() || !strings.HasSuffix(file.Name(), ".tmpl") {
 			continue
 		}
 
-		content, err := templateFS.ReadFile("templates/" + file.Name())
+		fullPath := filepath.Join(g.config.TemplateDir, file.Name())
+		info, err := g.parseTemplateFile(fullPath, file.Name())
 		if err != nil {
-			return err
+			return fmt.Errorf("error parsing template %s: %w", fullPath, err)
 		}
 
-		tmpl, err := template.New(file.Name()).Parse(string(content))
+		g.templateInfo[file.Name()] = info
+
+		// Parse template
+		tmpl, err := template.New(file.Name()).Parse(info.Content)
 		if err != nil {
 			return fmt.Errorf("error parsing template %s: %w", file.Name(), err)
 		}
 
 		g.templates[file.Name()] = tmpl
 	}
+
+	// Check if we have some templates
+	if len(g.templates) == 0 {
+		return fmt.Errorf("no valid templates found in directory: %s", g.config.TemplateDir)
+	}
+
 	return nil
+}
+
+// parseTemplateFile reads a template file and extracts path and filename directives
+func (g *SimpleGenerator) parseTemplateFile(filePath string, fileName string) (TemplateInfo, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return TemplateInfo{}, err
+	}
+	defer file.Close()
+
+	info := TemplateInfo{
+		Name: fileName,
+	}
+
+	// Read the file by lines to extract directives
+	scanner := bufio.NewScanner(file)
+	var contentBuilder strings.Builder
+	var readingDirectives = true
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+
+		if readingDirectives {
+			if strings.HasPrefix(trimmed, "#path =") {
+				info.Path = strings.TrimSpace(strings.TrimPrefix(trimmed, "#path ="))
+				continue
+			} else if strings.HasPrefix(trimmed, "#fileName:") || strings.HasPrefix(trimmed, "#fileName =") {
+				info.FileName = strings.TrimSpace(strings.SplitN(trimmed, "=", 2)[1])
+				continue
+			} else if trimmed == "" {
+				// Skip empty lines in directives section
+				continue
+			} else {
+				// First non-directive line, end directive parsing
+				readingDirectives = false
+				contentBuilder.WriteString(line + "\n")
+			}
+		} else {
+			contentBuilder.WriteString(line + "\n")
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return TemplateInfo{}, err
+	}
+
+	// Set content from builder
+	info.Content = contentBuilder.String()
+
+	return info, nil
 }
 
 func (g *SimpleGenerator) Generate(tableName, entityName string) error {
@@ -125,36 +210,136 @@ func (g *SimpleGenerator) Generate(tableName, entityName string) error {
 		LastParamIndex:   len(tableInfo.Columns),
 	}
 
-	if !g.config.SkipEntity {
-		if err := g.generateEntity(entityName, templateData); err != nil {
-			return err
+	// Process each template
+	for name, tmpl := range g.templates {
+		info := g.templateInfo[name]
+
+		// Skip based on name convention (fallback)
+		if strings.HasPrefix(name, "entity") && g.config.SkipEntity {
+			continue
+		}
+		if strings.HasPrefix(name, "repository") && g.config.SkipRepository {
+			continue
+		}
+		if strings.HasPrefix(name, "usecase") && g.config.SkipUsecase {
+			continue
+		}
+		if strings.HasPrefix(name, "handler") && g.config.SkipHandler {
+			continue
+		}
+		if strings.HasPrefix(name, "payload") && g.config.SkipPayload {
+			continue
+		}
+
+		// Generate output file path
+		err := g.generateFromTemplate(name, tmpl, info, templateData)
+		if err != nil {
+			return fmt.Errorf("error generating from template %s: %w", name, err)
 		}
 	}
 
-	if !g.config.SkipRepository {
-		if err := g.generateRepository(entityName, templateData); err != nil {
-			return err
+	return nil
+}
+
+func (g *SimpleGenerator) generateFromTemplate(templateName string, tmpl *template.Template, info TemplateInfo, data *TemplateData) error {
+	// Process path and filename templates
+	var pathBuf, fileNameBuf strings.Builder
+
+	if info.Path != "" {
+		pathTemplate, err := template.New("path").Parse(info.Path)
+		if err != nil {
+			return fmt.Errorf("invalid path template: %w", err)
+		}
+		if err := pathTemplate.Execute(&pathBuf, data); err != nil {
+			return fmt.Errorf("error executing path template: %w", err)
 		}
 	}
 
-	if !g.config.SkipUsecase {
-		if err := g.generateUsecase(entityName, templateData); err != nil {
-			return err
+	if info.FileName != "" {
+		fileNameTemplate, err := template.New("fileName").Parse(info.FileName)
+		if err != nil {
+			return fmt.Errorf("invalid fileName template: %w", err)
+		}
+		if err := fileNameTemplate.Execute(&fileNameBuf, data); err != nil {
+			return fmt.Errorf("error executing fileName template: %w", err)
 		}
 	}
 
-	if !g.config.SkipHandler {
-		if err := g.generateHandler(entityName, templateData); err != nil {
-			return err
+	// Determine output path and filename
+	var outputPath, outputFileName string
+
+	// Use template path directives or fall back to config
+	if pathBuf.String() != "" {
+		outputPath = filepath.Join(g.config.TargetProjectRoot, strings.TrimPrefix(pathBuf.String(), "/"))
+	} else {
+		// Fallback based on template name
+		if strings.HasPrefix(templateName, "entity") {
+			outputPath = g.config.EntityDir
+		} else if strings.HasPrefix(templateName, "repository") {
+			outputPath = g.config.RepositoryDir
+		} else if strings.HasPrefix(templateName, "usecase") {
+			outputPath = g.config.UsecaseDir
+		} else if strings.HasPrefix(templateName, "handler") {
+			outputPath = g.config.HandlerDir
+		} else if strings.HasPrefix(templateName, "payload") {
+			outputPath = g.config.PayloadDir
+		} else {
+			outputPath = g.config.TargetProjectRoot
 		}
 	}
 
-	if !g.config.SkipPayload {
-		if err := g.generatePayload(entityName, templateData); err != nil {
-			return err
+	// Use template fileName directive or fallback
+	if fileNameBuf.String() != "" {
+		if strings.HasPrefix(fileNameBuf.String(), "/") {
+			parts := strings.Split(strings.TrimPrefix(fileNameBuf.String(), "/"), "/")
+
+			// If multiple parts, the first n-1 parts are subdirectories
+			if len(parts) > 1 {
+				subdirs := parts[:len(parts)-1]
+				outputPath = filepath.Join(outputPath, filepath.Join(subdirs...))
+				outputFileName = parts[len(parts)-1]
+			} else {
+				outputFileName = parts[0]
+			}
+		} else {
+			outputFileName = fileNameBuf.String()
+		}
+	} else {
+		// Fallback names
+		lowerName := strings.ToLower(data.EntityName)
+		if strings.HasPrefix(templateName, "entity") {
+			outputFileName = fmt.Sprintf("%s.go", lowerName)
+		} else if strings.HasPrefix(templateName, "repository") {
+			outputPath = filepath.Join(outputPath, lowerName)
+			outputFileName = "postgres.go"
+		} else if strings.HasPrefix(templateName, "usecase") {
+			outputFileName = fmt.Sprintf("%s_usecase.go", lowerName)
+		} else if strings.HasPrefix(templateName, "handler") {
+			outputFileName = fmt.Sprintf("%s.go", lowerName)
+		} else if strings.HasPrefix(templateName, "payload") {
+			outputFileName = fmt.Sprintf("%s.go", lowerName)
+		} else {
+			outputFileName = fmt.Sprintf("%s.go", templateName[:len(templateName)-5]) // remove .tmpl
 		}
 	}
 
+	// Ensure directory exists
+	if err := os.MkdirAll(outputPath, os.ModePerm); err != nil {
+		return fmt.Errorf("error creating directory %s: %w", outputPath, err)
+	}
+
+	fullPath := filepath.Join(outputPath, outputFileName)
+	f, err := os.Create(fullPath)
+	if err != nil {
+		return fmt.Errorf("error creating file %s: %w", fullPath, err)
+	}
+	defer f.Close()
+
+	if err := tmpl.Execute(f, data); err != nil {
+		return fmt.Errorf("error executing template: %w", err)
+	}
+
+	fmt.Printf("Generated: %s\n", fullPath)
 	return nil
 }
 
@@ -287,76 +472,6 @@ func (g *SimpleGenerator) readMigration() (string, error) {
 	}
 
 	return string(content), nil
-}
-
-func (g *SimpleGenerator) generateEntity(entityName string, data *TemplateData) error {
-	entityFile := fmt.Sprintf("%s/%s.go", g.config.EntityDir, strings.ToLower(entityName))
-
-	f, err := os.Create(entityFile)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	return g.templates["entity.tmpl"].Execute(f, data)
-}
-
-func (g *SimpleGenerator) generateRepository(entityName string, data *TemplateData) error {
-	repoDir := fmt.Sprintf("%s/%s", g.config.RepositoryDir, strings.ToLower(entityName))
-	if err := os.MkdirAll(repoDir, os.ModePerm); err != nil {
-		return fmt.Errorf("error creating repository directory: %w", err)
-	}
-
-	repoFile := fmt.Sprintf("%s/postgres.go", repoDir)
-
-	f, err := os.Create(repoFile)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	return g.templates["repository.tmpl"].Execute(f, data)
-}
-
-func (g *SimpleGenerator) generateUsecase(entityName string, data *TemplateData) error {
-	usecaseFile := fmt.Sprintf("%s/%s_usecase.go", g.config.UsecaseDir, strings.ToLower(entityName))
-
-	f, err := os.Create(usecaseFile)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	return g.templates["usecase.tmpl"].Execute(f, data)
-}
-
-func (g *SimpleGenerator) generateHandler(entityName string, data *TemplateData) error {
-	handlerFile := fmt.Sprintf("%s/%s.go", g.config.HandlerDir, strings.ToLower(entityName))
-
-	f, err := os.Create(handlerFile)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	return g.templates["handler.tmpl"].Execute(f, data)
-}
-
-func (g *SimpleGenerator) generatePayload(entityName string, data *TemplateData) error {
-	// Ensure directory exists
-	if err := os.MkdirAll(g.config.PayloadDir, os.ModePerm); err != nil {
-		return fmt.Errorf("error creating payload directory: %w", err)
-	}
-
-	payloadFile := fmt.Sprintf("%s/%s.go", g.config.PayloadDir, strings.ToLower(entityName))
-
-	f, err := os.Create(payloadFile)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	return g.templates["payload.tmpl"].Execute(f, data)
 }
 
 type TableInfo struct {
